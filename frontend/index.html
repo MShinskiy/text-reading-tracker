@@ -45,19 +45,37 @@
         </div>
       </div>
 
-      <div class="controls">
-        <button id="startBtn">Start camera</button>
-        <button id="calibrateBtn" disabled>Calibrate</button>
-        <button id="resetBtn">Reset</button>
+      <div class="distanceControl">
+        <label for="faceDistanceInput">Face distance</label>
+        <input id="faceDistanceInput" type="number" min="15" max="150" step="1" value="60" />
+        <button id="applyDistanceBtn" type="button">Apply cm</button>
+        <button id="estimateDistanceBtn" type="button" disabled>Estimate</button>
+        <div class="distanceAdvanced">
+          <label for="cameraFovInput">Camera FOV</label>
+          <input id="cameraFovInput" type="number" min="40" max="120" step="1" value="78" />
+          <label for="eyeWidthInput">Eye width</label>
+          <input id="eyeWidthInput" type="number" min="6" max="13" step="0.1" value="9.5" />
+        </div>
+        <p id="distanceStatus">No face distance applied.</p>
       </div>
 
-      <div class="controls sessionControls">
-        <button id="startSessionBtn" disabled>Start session</button>
-        <button id="finishSessionBtn" disabled>Finish session</button>
-      </div>
+      <div class="actionColumn">
+        <p id="setupStatus">Complete screen scale and face distance before calibration.</p>
 
-      <p id="status">Idle</p>
-      <p id="sessionStatus">No reading session active.</p>
+        <div class="controls">
+          <button id="startBtn">Start camera</button>
+          <button id="calibrateBtn" disabled>Calibrate</button>
+          <button id="resetBtn">Reset</button>
+        </div>
+
+        <div class="controls sessionControls">
+          <button id="startSessionBtn" disabled>Start session</button>
+          <button id="finishSessionBtn" disabled>Finish session</button>
+        </div>
+
+        <p id="status">Idle</p>
+        <p id="sessionStatus">No reading session active.</p>
+      </div>
     </div>
   </section>
 

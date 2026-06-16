@@ -17,6 +17,13 @@ const cardWidthSlider = document.getElementById('cardWidthSlider');
 const cardReference = document.getElementById('cardReference');
 const applyCardScaleBtn = document.getElementById('applyCardScaleBtn');
 const scaleStatusEl = document.getElementById('scaleStatus');
+const faceDistanceInput = document.getElementById('faceDistanceInput');
+const applyDistanceBtn = document.getElementById('applyDistanceBtn');
+const estimateDistanceBtn = document.getElementById('estimateDistanceBtn');
+const cameraFovInput = document.getElementById('cameraFovInput');
+const eyeWidthInput = document.getElementById('eyeWidthInput');
+const distanceStatusEl = document.getElementById('distanceStatus');
+const setupStatusEl = document.getElementById('setupStatus');
 
 let stream = null;
 let sending = false;
@@ -43,6 +50,7 @@ let calibrationComplete = false;
 let calibrationCapturing = false;
 let calibratedViewport = null;
 let physicalWorkspace = null;
+let faceDistanceCm = null;
 const calibrationPoints = [
   { label: 'center', x: 0.5, y: 0.5 },
   { label: 'top left edge', x: calibrationEdgeX, y: calibrationEdgeY },
@@ -91,6 +99,31 @@ async function captureFrameBlob() {
   if (!stream || !video.videoWidth) return null;
   drawFrameToCanvas();
   return await canvasToBlob();
+}
+
+function setupComplete() {
+  return Boolean(physicalWorkspace && Number.isFinite(faceDistanceCm));
+}
+
+function updateSetupStatus() {
+  const needs = [];
+  if (!physicalWorkspace) {
+    needs.push('screen scale');
+  }
+  if (!Number.isFinite(faceDistanceCm)) {
+    needs.push('face distance');
+  }
+
+  setupStatusEl.textContent = needs.length
+    ? `Complete ${needs.join(' and ')} before calibration.`
+    : 'Pre-calibration setup complete.';
+}
+
+function updateCalibrationControls() {
+  const canCalibrate = Boolean(stream && setupComplete() && !calibrationComplete && !calibrationCapturing);
+  calibrateBtn.disabled = !canCalibrate;
+  calibrationTarget.disabled = !canCalibrate;
+  estimateDistanceBtn.disabled = !stream;
 }
 
 function getReadingRectPayload() {
@@ -162,7 +195,56 @@ async function sendCurrentFrame(endpoint, extraFields = {}, options = {}) {
   return await response.json();
 }
 
+async function applyFaceDistance(distanceCm) {
+  const form = new FormData();
+  form.append('face_distance_cm', String(distanceCm));
+  const response = await fetch('/api/set-face-distance', { method: 'POST', body: form });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const result = await response.json();
+  faceDistanceCm = Number(result.face_distance_cm);
+  distanceStatusEl.textContent = `Face distance applied: ${faceDistanceCm.toFixed(1)} cm.`;
+  updateSetupStatus();
+  updateCalibrationStatus();
+}
+
+async function estimateFaceDistance() {
+  if (!stream || !video.videoWidth) {
+    throw new Error('Start the camera before estimating distance.');
+  }
+
+  const form = new FormData();
+  for (let i = 0; i < 8; i += 1) {
+    const blob = await captureFrameBlob();
+    if (blob) {
+      form.append('frames', blob, `distance-${i}.jpg`);
+    }
+    if (i < 7) {
+      await sleep(40);
+    }
+  }
+
+  form.append('horizontal_fov_deg', String(Number(cameraFovInput.value) || 78));
+  form.append('real_eye_width_cm', String(Number(eyeWidthInput.value) || 9.5));
+
+  const response = await fetch('/api/estimate-distance', { method: 'POST', body: form });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const result = await response.json();
+  faceDistanceCm = Number(result.face_distance_cm);
+  faceDistanceInput.value = faceDistanceCm.toFixed(0);
+  distanceStatusEl.textContent = `Estimated face distance: ${faceDistanceCm.toFixed(1)} cm from ${result.sample_count} frame${result.sample_count === 1 ? '' : 's'}.`;
+  updateSetupStatus();
+  updateCalibrationStatus();
+}
+
 async function sendCalibrationBatch(point) {
+  if (!setupComplete()) {
+    throw new Error('Complete screen scale and face distance before calibration.');
+  }
+
   const targetCenter = getCalibrationPointCenterPx(point);
   const form = new FormData();
 
@@ -225,7 +307,7 @@ function resetCalibrationUi() {
   calibrationCapturing = false;
   calibratedViewport = null;
   calibrateBtn.textContent = `Calibrate 1 / ${calibrationPoints.length}`;
-  calibrationTarget.disabled = !stream;
+  updateCalibrationControls();
   positionCalibrationTarget();
 }
 
@@ -239,9 +321,26 @@ function updateCalibrationStatus() {
     return;
   }
 
+  if (!setupComplete()) {
+    calibrateBtn.textContent = 'Calibrate';
+    statusEl.textContent = 'Complete pre-calibration setup first.';
+    hideCalibrationTarget();
+    updateCalibrationControls();
+    return;
+  }
+
+  if (!stream) {
+    calibrateBtn.textContent = 'Calibrate';
+    statusEl.textContent = 'Start the camera before calibration.';
+    hideCalibrationTarget();
+    updateCalibrationControls();
+    return;
+  }
+
   const point = currentCalibrationPoint();
   calibrateBtn.textContent = `Calibrate ${calibrationStep + 1} / ${calibrationPoints.length}`;
   statusEl.textContent = `Look at the ${point.label} target, then click it`;
+  updateCalibrationControls();
   showCalibrationTarget();
 }
 
@@ -280,7 +379,6 @@ async function invalidateCalibrationIfViewportChanged() {
   calibrationComplete = false;
   gazeDot.style.display = 'none';
   resetCalibrationUi();
-  calibrateBtn.disabled = !stream;
   updateCalibrationStatus();
   statusEl.textContent = 'Window size changed. Please recalibrate.';
   await fetch('/api/reset', { method: 'POST' });
@@ -289,8 +387,11 @@ async function invalidateCalibrationIfViewportChanged() {
 
 function updateCardReference() {
   if (!cardWidthSlider || !cardReference) return;
-  const stageWidth = cardReference.parentElement?.clientWidth || Number(cardWidthSlider.max);
-  const widthPx = Math.min(Number(cardWidthSlider.value), stageWidth);
+  const stage = cardReference.parentElement;
+  const stageWidth = stage?.clientWidth || Number(cardWidthSlider.max);
+  const stageHeight = stage?.clientHeight || Number(cardWidthSlider.max);
+  const maxVisibleWidth = Math.min(stageWidth, stageHeight * (bankCardWidthCm / bankCardHeightCm));
+  const widthPx = Math.min(Number(cardWidthSlider.value), maxVisibleWidth);
   cardReference.style.width = `${widthPx}px`;
   cardReference.style.height = `${widthPx * (bankCardHeightCm / bankCardWidthCm)}px`;
 }
@@ -308,11 +409,12 @@ function applyCardScale() {
   };
 
   scaleStatusEl.textContent = `Scale applied: ${physicalWorkspace.widthCm.toFixed(1)} x ${physicalWorkspace.heightCm.toFixed(1)} cm viewport.`;
+  updateSetupStatus();
+  updateCalibrationStatus();
 
   if (calibrationComplete) {
     fetch('/api/reset', { method: 'POST' });
     resetCalibrationUi();
-    calibrateBtn.disabled = !stream;
     updateCalibrationStatus();
     statusEl.textContent = 'Screen scale changed. Please recalibrate.';
   }
@@ -543,8 +645,8 @@ startBtn.addEventListener('click', async () => {
     video.srcObject = stream;
     await video.play();
     resetCalibrationUi();
-    calibrateBtn.disabled = false;
     startBtn.disabled = true;
+    updateSetupStatus();
     updateCalibrationStatus();
     loopHandle = setInterval(trackingLoop, frameIntervalMs);
   } catch (error) {
@@ -554,6 +656,10 @@ startBtn.addEventListener('click', async () => {
 
 async function captureCalibrationPoint() {
   if (calibrationCapturing) return;
+  if (!setupComplete()) {
+    updateCalibrationStatus();
+    return;
+  }
 
   try {
     const point = currentCalibrationPoint();
@@ -573,8 +679,7 @@ async function captureCalibrationPoint() {
 
     if (!result || result.valid === false || !result.debug?.calibration_point_added) {
       statusEl.textContent = `Calibration failed: ${result?.reason || 'unknown'}`;
-      calibrateBtn.disabled = false;
-      calibrationTarget.disabled = false;
+      updateCalibrationControls();
       return;
     }
 
@@ -586,13 +691,11 @@ async function captureCalibrationPoint() {
     updateCalibrationStatus();
   } catch (error) {
     statusEl.textContent = `Calibration error: ${error.message}`;
-    calibrateBtn.disabled = false;
-    calibrationTarget.disabled = false;
+    updateCalibrationControls();
   } finally {
     calibrationCapturing = false;
     if (!calibrationComplete) {
-      calibrateBtn.disabled = !stream;
-      calibrationTarget.disabled = !stream;
+      updateCalibrationControls();
     }
   }
 }
@@ -604,7 +707,6 @@ resetBtn.addEventListener('click', async () => {
   await fetch('/api/reset', { method: 'POST' });
   gazeDot.style.display = 'none';
   resetCalibrationUi();
-  calibrateBtn.disabled = !stream;
   updateCalibrationStatus();
   resetReadingState({ keepText: true });
 });
@@ -618,6 +720,26 @@ cardScaleToggle.addEventListener('click', () => {
 
 cardWidthSlider.addEventListener('input', updateCardReference);
 applyCardScaleBtn.addEventListener('click', applyCardScale);
+
+applyDistanceBtn.addEventListener('click', async () => {
+  try {
+    await applyFaceDistance(Number(faceDistanceInput.value));
+  } catch (error) {
+    distanceStatusEl.textContent = `Distance error: ${error.message}`;
+  }
+});
+
+estimateDistanceBtn.addEventListener('click', async () => {
+  try {
+    estimateDistanceBtn.disabled = true;
+    distanceStatusEl.textContent = 'Estimating face distance...';
+    await estimateFaceDistance();
+  } catch (error) {
+    distanceStatusEl.textContent = `Estimate error: ${error.message}`;
+  } finally {
+    updateCalibrationControls();
+  }
+});
 
 startSessionBtn.addEventListener('click', () => {
   if (words.length === 0) {
@@ -644,8 +766,9 @@ finishSessionBtn.addEventListener('click', () => {
 });
 
 resetCalibrationUi();
-showCalibrationTarget();
 updateCardReference();
+updateSetupStatus();
+updateCalibrationStatus();
 
 window.addEventListener('resize', () => {
   invalidateCalibrationIfViewportChanged();

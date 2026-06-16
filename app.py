@@ -63,6 +63,16 @@ def _reading_rect(
     }
 
 
+def _average_distances(distances: list[float]) -> float:
+    values = np.array(distances, dtype=float)
+    if len(values) >= 5:
+        median = float(np.median(values))
+        deviations = np.abs(values - median)
+        keep_count = max(3, int(round(len(values) * 0.75)))
+        values = values[np.argsort(deviations)[:keep_count]]
+    return float(np.mean(values))
+
+
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
@@ -90,6 +100,53 @@ async def calibrate(
     gaze_tracker.configure_workspace(workspace_width, workspace_height)
     result = gaze_tracker.calibrate_eyes_and_monitor(frame_bgr)
     return JSONResponse(result.to_dict())
+
+
+@app.post("/api/set-face-distance")
+def set_face_distance(
+    face_distance_cm: float = Form(...),
+):
+    gaze_tracker = _get_tracker()
+    try:
+        distance = gaze_tracker.set_face_distance_cm(face_distance_cm)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "face_distance_cm": distance}
+
+
+@app.post("/api/estimate-distance")
+async def estimate_distance(
+    frames: list[UploadFile] = File(...),
+    horizontal_fov_deg: float = Form(78.0),
+    real_eye_width_cm: float = Form(9.5),
+):
+    frames_bgr = await _decode_uploads_to_bgr(frames)
+    gaze_tracker = _get_tracker()
+    distances = [
+        distance
+        for frame in frames_bgr
+        if (
+            distance := gaze_tracker.update_face_distance_from_frame(
+                frame,
+                horizontal_fov_deg=horizontal_fov_deg,
+                real_eye_width_cm=real_eye_width_cm,
+            )
+        )
+        is not None
+    ]
+    if not distances:
+        raise HTTPException(status_code=400, detail="Could not estimate face distance")
+
+    averaged = _average_distances(distances)
+    gaze_tracker.set_face_distance_cm(averaged)
+    return {
+        "ok": True,
+        "face_distance_cm": averaged,
+        "sample_count": len(distances),
+        "raw_distances_cm": distances,
+        "horizontal_fov_deg": horizontal_fov_deg,
+        "real_eye_width_cm": real_eye_width_cm,
+    }
 
 
 @app.post("/api/calibrate-point")

@@ -199,6 +199,8 @@ class MonitorTracker:
         self.calibration_transform: Optional[np.ndarray] = None
         self.calibration_model: Optional[str] = None
         self.calibration_residuals: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        self.calibration_vertical_rows: List[Tuple[float, float]] = []
+        self.calibration_diagnostics: Dict[str, Any] = {}
 
         # Smoothing buffer
         self.combined_gaze_directions: deque[np.ndarray] = deque(maxlen=self.config.filter_length)
@@ -307,6 +309,8 @@ class MonitorTracker:
         self.calibration_transform = None
         self.calibration_model = None
         self.calibration_residuals.clear()
+        self.calibration_vertical_rows.clear()
+        self.calibration_diagnostics.clear()
         self.combined_gaze_directions.clear()
         self.R_ref_nose = [None]
 
@@ -611,6 +615,7 @@ class MonitorTracker:
         result.debug["calibration_raw_frame_count"] = len(raw_points)
         result.debug["calibration_raw_kept_count"] = kept_count
         result.debug["calibration_model"] = self.calibration_model
+        result.debug["calibration_diagnostics"] = self.calibration_diagnostics
         result.debug["point_calibrated"] = self.point_calibrated
         result.debug["workspace_calibration"] = (
             self.workspace_calibration.to_dict()
@@ -625,30 +630,51 @@ class MonitorTracker:
         self.calibration_transform = None
         self.calibration_model = None
         self.calibration_residuals.clear()
+        self.calibration_vertical_rows.clear()
+        self.calibration_diagnostics.clear()
 
     def _fit_calibration_transform(self) -> None:
         if len(self.calibration_samples) < 3:
             self.calibration_transform = None
             self.calibration_model = None
             self.calibration_residuals.clear()
+            self.calibration_vertical_rows.clear()
+            self.calibration_diagnostics.clear()
             return
 
         raw = np.array([[rx, ry, 1.0] for (rx, ry), _target in self.calibration_samples], dtype=float)
         target = np.array([[tx, ty] for _raw, (tx, ty) in self.calibration_samples], dtype=float)
 
-        # coeff is 3x2. Transpose to 2x3 so [x, y] = transform @ [raw_x, raw_y, 1].
-        coeff, *_ = np.linalg.lstsq(raw, target, rcond=None)
-        self.calibration_transform = coeff.T
-        self.calibration_model = "affine"
+        x_coeff, *_ = np.linalg.lstsq(raw, target[:, 0], rcond=None)
+        y_basis = raw[:, [1, 2]]
+        y_coeff, *_ = np.linalg.lstsq(y_basis, target[:, 1], rcond=None)
+        self.calibration_transform = np.array(
+            [
+                x_coeff,
+                [0.0, y_coeff[0], y_coeff[1]],
+            ],
+            dtype=float,
+        )
+        self.calibration_model = "axis_separated"
         self.calibration_residuals.clear()
+        self.calibration_vertical_rows.clear()
 
         if len(self.calibration_samples) >= 9:
-            predicted = raw @ coeff
+            predicted_x = raw @ x_coeff
+            predicted_y = y_basis @ y_coeff
+            predicted = np.column_stack([predicted_x, predicted_y])
             self.calibration_residuals = [
                 ((float(rx), float(ry)), (float(tx - px), float(ty - py)))
                 for ((rx, ry), (tx, ty)), (px, py) in zip(self.calibration_samples, predicted)
             ]
-            self.calibration_model = "affine_local"
+            self.calibration_vertical_rows = _vertical_residual_rows(self.calibration_samples, predicted_y)
+            self.calibration_model = "axis_separated_vertical_rows"
+
+        self.calibration_diagnostics = _calibration_diagnostics(
+            self.calibration_samples,
+            predicted=np.column_stack([raw @ self.calibration_transform[0], raw @ self.calibration_transform[1]]),
+            vertical_rows=self.calibration_vertical_rows,
+        )
 
     def _apply_calibration_transform(self, raw_x_norm: float, raw_y_norm: float) -> Tuple[float, float]:
         if self.calibration_transform is None:
@@ -659,12 +685,8 @@ class MonitorTracker:
 
         features = np.array([raw_x_norm, raw_y_norm, 1.0], dtype=float)
         corrected = self.calibration_transform @ features
-        if self.calibration_model == "affine_local" and self.calibration_residuals:
-            corrected += _local_residual_correction(
-                raw_x_norm,
-                raw_y_norm,
-                self.calibration_residuals,
-            )
+        if self.calibration_model == "axis_separated_vertical_rows" and self.calibration_vertical_rows:
+            corrected[1] += _vertical_row_correction(raw_y_norm, self.calibration_vertical_rows)
 
         return (
             float(np.clip(corrected[0], 0.0, 1.0)),
@@ -722,6 +744,14 @@ class MonitorTracker:
         if distance is not None:
             self.config.face_to_monitor_cm = float(distance)
         return distance
+
+    def set_face_distance_cm(self, distance_cm: float) -> float:
+        """Store a manually measured face-to-screen distance."""
+        distance = float(distance_cm)
+        if not 15.0 <= distance <= 150.0:
+            raise ValueError("face distance must be between 15 and 150 cm")
+        self.config.face_to_monitor_cm = distance
+        return self.config.face_to_monitor_cm
 
     def _analyze_frame(self, frame_bgr: np.ndarray, update_smoothing: bool = True) -> Optional[_FrameState]:
         h, w = frame_bgr.shape[:2]
@@ -913,6 +943,8 @@ class MonitorTracker:
             ),
             "calibration_model": self.calibration_model,
             "calibration_residual_count": len(self.calibration_residuals),
+            "calibration_vertical_rows": list(self.calibration_vertical_rows),
+            "calibration_diagnostics": self.calibration_diagnostics,
             "workspace": (
                 self.workspace_calibration.to_dict()
                 if self.workspace_calibration is not None
@@ -953,30 +985,63 @@ def _robust_average_2d(points: Sequence[Tuple[float, float]]) -> Tuple[float, fl
     return float(averaged[0]), float(averaged[1]), int(len(kept))
 
 
-def _local_residual_correction(
-    x: float,
-    y: float,
-    residuals: Sequence[Tuple[Tuple[float, float], Tuple[float, float]]],
-) -> np.ndarray:
-    if not residuals:
-        return np.zeros(2, dtype=float)
+def _vertical_residual_rows(
+    samples: Sequence[Tuple[Tuple[float, float], Tuple[float, float]]],
+    predicted_y: np.ndarray,
+) -> List[Tuple[float, float]]:
+    grouped: Dict[float, List[Tuple[float, float]]] = {}
+    for ((raw_x, raw_y), (_target_x, target_y)), pred_y in zip(samples, predicted_y):
+        row_key = round(float(target_y), 3)
+        grouped.setdefault(row_key, []).append((float(raw_y), float(target_y - pred_y)))
 
-    point = np.array([x, y], dtype=float)
-    raw_points = np.array([raw for raw, _residual in residuals], dtype=float)
-    residual_values = np.array([residual for _raw, residual in residuals], dtype=float)
-    distances = np.linalg.norm(raw_points - point, axis=1)
-    nearest_count = min(4, len(residuals))
-    nearest_indices = np.argsort(distances)[:nearest_count]
+    rows: List[Tuple[float, float]] = []
+    for _target_y, values in sorted(grouped.items()):
+        raw_y_values = np.array([raw_y for raw_y, _residual_y in values], dtype=float)
+        residual_y_values = np.array([residual_y for _raw_y, residual_y in values], dtype=float)
+        rows.append((float(np.mean(raw_y_values)), float(np.mean(residual_y_values))))
+    return rows
 
-    nearest_distances = distances[nearest_indices]
-    nearest_residuals = residual_values[nearest_indices]
-    sigma = 0.22
-    weights = np.exp(-((nearest_distances / sigma) ** 2))
-    total_weight = float(np.sum(weights))
-    if total_weight <= 1e-9:
-        return np.zeros(2, dtype=float)
 
-    return np.average(nearest_residuals, axis=0, weights=weights)
+def _vertical_row_correction(raw_y: float, rows: Sequence[Tuple[float, float]]) -> float:
+    if not rows:
+        return 0.0
+    if len(rows) == 1:
+        return float(rows[0][1])
+
+    ordered = sorted(rows, key=lambda item: item[0])
+    row_y = np.array([item[0] for item in ordered], dtype=float)
+    residual_y = np.array([item[1] for item in ordered], dtype=float)
+    return float(np.interp(raw_y, row_y, residual_y))
+
+
+def _calibration_diagnostics(
+    samples: Sequence[Tuple[Tuple[float, float], Tuple[float, float]]],
+    predicted: np.ndarray,
+    vertical_rows: Sequence[Tuple[float, float]],
+) -> Dict[str, Any]:
+    if not samples:
+        return {}
+
+    target = np.array([[tx, ty] for _raw, (tx, ty) in samples], dtype=float)
+    residual = target - predicted
+    row_groups: Dict[float, List[float]] = {}
+    for (_raw, (_target_x, target_y)), residual_y in zip(samples, residual[:, 1]):
+        row_groups.setdefault(round(float(target_y), 3), []).append(float(residual_y))
+
+    return {
+        "mean_x_error": float(np.mean(residual[:, 0])),
+        "mean_y_error": float(np.mean(residual[:, 1])),
+        "mean_abs_x_error": float(np.mean(np.abs(residual[:, 0]))),
+        "mean_abs_y_error": float(np.mean(np.abs(residual[:, 1]))),
+        "row_mean_y_error": {
+            str(row): float(np.mean(values))
+            for row, values in sorted(row_groups.items())
+        },
+        "vertical_rows": [
+            {"raw_y": raw_y, "residual_y": residual_y}
+            for raw_y, residual_y in vertical_rows
+        ],
+    }
 
 
 def _focal_px(width: float, fov_deg: float) -> float:
