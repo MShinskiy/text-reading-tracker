@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eye Tracking</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <button id="calibrationTarget" type="button" aria-label="Capture calibration target" disabled>
+    <span></span>
+  </button>
+  <div id="gazeDot"></div>
+
+  <main class="readerStage" aria-label="Reading workspace">
+    <section id="textDisplay" class="textDisplay" aria-live="polite">
+      <p class="emptyText">Upload a text file to begin.</p>
+    </section>
+  </main>
+
+  <section class="panel" aria-label="Eye tracking controls">
+    <div class="panelPreview">
+      <h1>Eye Tracking</h1>
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="canvas" hidden></canvas>
+    </div>
+
+    <div class="panelControls">
+      <div class="fileControl">
+        <label for="textFile">Text file</label>
+        <input id="textFile" type="file" accept=".txt,text/plain" />
+      </div>
+
+      <div class="scaleControl">
+        <button id="cardScaleToggle" type="button">Screen scale</button>
+        <div id="cardScalePanel" class="cardScalePanel" hidden>
+          <p>Optional: match this rectangle to a real bank card before calibration.</p>
+          <div class="cardScaleStage" aria-hidden="true">
+            <div id="cardReference" class="cardReference"></div>
+          </div>
+          <label for="cardWidthSlider">Card width</label>
+          <input id="cardWidthSlider" type="range" min="180" max="520" value="320" />
+          <button id="applyCardScaleBtn" type="button">Apply scale</button>
+          <p id="scaleStatus">No physical screen scale applied.</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn">Start camera</button>
+        <button id="calibrateBtn" disabled>Calibrate</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+
+      <div class="controls sessionControls">
+        <button id="startSessionBtn" disabled>Start session</button>
+        <button id="finishSessionBtn" disabled>Finish session</button>
+      </div>
+
+      <p id="status">Idle</p>
+      <p id="sessionStatus">No reading session active.</p>
+    </div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

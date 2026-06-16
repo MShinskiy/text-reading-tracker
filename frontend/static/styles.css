@@ -1,0 +1,320 @@
+:root {
+  color-scheme: dark;
+  --bg: #111;
+  --panel: rgba(28, 28, 28, 0.92);
+  --text: #eee;
+  --muted: #aaa;
+  --border: rgba(255, 255, 255, 0.12);
+  --read: rgba(135, 255, 174, 0.24);
+  --hit: rgba(255, 255, 255, 0.22);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.readerStage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 40px 230px;
+  pointer-events: none;
+}
+
+.textDisplay {
+  width: min(1280px, calc(100vw - 80px));
+  height: min(60vh, 560px);
+  overflow: hidden;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: clamp(28px, 2.8vw, 46px);
+  line-height: 1.5;
+  text-align: left;
+  pointer-events: auto;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.22);
+}
+
+.emptyText {
+  margin: 0;
+  color: var(--muted);
+  text-align: center;
+  font-size: 24px;
+}
+
+.word {
+  display: inline-block;
+  padding: 0 0.08em;
+  margin: 0 0.02em;
+  border-radius: 0.18em;
+  overflow-wrap: anywhere;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.word.hit {
+  background: var(--hit);
+}
+
+.word.read {
+  background: var(--read);
+  color: #dfffe8;
+}
+
+.panel {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: center;
+  gap: 18px;
+  width: min(960px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  text-align: left;
+  transform: translateX(-50%);
+}
+
+.panelPreview {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.panelControls {
+  min-width: 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+video {
+  width: 200px;
+  max-width: 100%;
+  border-radius: 12px;
+  background: #222;
+  border: 1px solid var(--border);
+}
+
+.fileControl {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+input[type="file"] {
+  max-width: 260px;
+  color: var(--muted);
+}
+
+.scaleControl {
+  margin: 8px 0 2px;
+}
+
+.scaleControl > button {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border);
+}
+
+.cardScalePanel {
+  margin: 10px auto 0;
+  padding: 12px;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cardScalePanel p {
+  margin: 0 0 8px;
+}
+
+.cardScaleStage {
+  position: relative;
+  width: 100%;
+  height: 250px;
+  max-width: 520px;
+  margin: 8px auto;
+}
+
+.cardReference {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 320px;
+  height: 202px;
+  max-width: 100%;
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03));
+  transform-origin: top left;
+}
+
+.cardScalePanel label {
+  display: block;
+  margin: 8px 0 4px;
+}
+
+.cardScalePanel input[type="range"] {
+  width: min(320px, 100%);
+}
+
+.cardScalePanel button {
+  margin-top: 8px;
+  padding: 8px 12px;
+}
+
+.controls {
+  display: flex;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 10px 0 8px;
+}
+
+.sessionControls {
+  margin-top: 6px;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-weight: 700;
+  color: #111;
+  background: #eee;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+#status,
+#sessionStatus {
+  min-height: 18px;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+#calibrationTarget {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, 0.85);
+  border-radius: 999px;
+  pointer-events: auto;
+  z-index: 25;
+  background: transparent;
+  cursor: crosshair;
+  box-shadow: 0 0 28px rgba(255, 255, 255, 0.28);
+}
+
+#calibrationTarget:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+#calibrationTarget.hidden {
+  display: none;
+}
+
+#calibrationTarget::before,
+#calibrationTarget::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  transform: translate(-50%, -50%);
+}
+
+#calibrationTarget::before {
+  width: 34px;
+  height: 2px;
+}
+
+#calibrationTarget::after {
+  width: 2px;
+  height: 34px;
+}
+
+#calibrationTarget span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #eee;
+  transform: translate(-50%, -50%);
+}
+
+#gazeDot {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border: 2px solid white;
+  border-radius: 999px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  display: none;
+  z-index: 30;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.8);
+}
+
+@media (max-width: 720px) {
+  .readerStage {
+    padding: 24px 16px 300px;
+  }
+
+  .textDisplay {
+    width: calc(100vw - 32px);
+    height: min(54vh, 500px);
+    padding: 20px;
+    font-size: clamp(24px, 6vw, 36px);
+  }
+
+  .panel {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  video {
+    width: 180px;
+  }
+}
