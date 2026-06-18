@@ -24,6 +24,9 @@ const cameraFovInput = document.getElementById('cameraFovInput');
 const eyeWidthInput = document.getElementById('eyeWidthInput');
 const distanceStatusEl = document.getElementById('distanceStatus');
 const setupStatusEl = document.getElementById('setupStatus');
+const trackingPolicyInputs = Array.from(document.querySelectorAll('input[name="trackingPolicy"]'));
+const relaxedThresholdXInput = document.getElementById('relaxedThresholdX');
+const relaxedThresholdYInput = document.getElementById('relaxedThresholdY');
 
 let stream = null;
 let sending = false;
@@ -45,22 +48,37 @@ let sessionActive = false;
 let sessionStartMs = null;
 let sessionRows = [];
 let readWordIndexes = new Set();
+let activeTrackingPolicy = 'freehand';
+let activeRelaxedThresholdX = 0;
+let activeRelaxedThresholdY = 0;
+let nextSequentialWordIndex = 0;
 let calibrationStep = 0;
 let calibrationComplete = false;
 let calibrationCapturing = false;
 let calibratedViewport = null;
 let physicalWorkspace = null;
 let faceDistanceCm = null;
+const calibrationRows = [
+  calibrationEdgeY,
+  0.25,
+  0.5,
+  0.75,
+  1 - calibrationEdgeY,
+];
+const calibrationColumns = [
+  { key: 'left', x: calibrationEdgeX },
+  { key: 'center', x: 0.5 },
+  { key: 'right', x: 1 - calibrationEdgeX },
+];
 const calibrationPoints = [
   { label: 'center', x: 0.5, y: 0.5 },
-  { label: 'top left edge', x: calibrationEdgeX, y: calibrationEdgeY },
-  { label: 'top edge', x: 0.5, y: calibrationEdgeY },
-  { label: 'top right edge', x: 1 - calibrationEdgeX, y: calibrationEdgeY },
-  { label: 'left edge', x: calibrationEdgeX, y: 0.5 },
-  { label: 'right edge', x: 1 - calibrationEdgeX, y: 0.5 },
-  { label: 'bottom left edge', x: calibrationEdgeX, y: 1 - calibrationEdgeY },
-  { label: 'bottom edge', x: 0.5, y: 1 - calibrationEdgeY },
-  { label: 'bottom right edge', x: 1 - calibrationEdgeX, y: 1 - calibrationEdgeY },
+  ...calibrationRows.flatMap((y, rowIndex) => (
+    calibrationColumns.map(column => ({
+      label: `row ${rowIndex + 1} ${column.key}`,
+      x: column.x,
+      y,
+    }))
+  )).filter(point => !(point.x === 0.5 && point.y === 0.5)),
 ];
 
 function workspaceWidth() {
@@ -313,7 +331,7 @@ function resetCalibrationUi() {
 
 function updateCalibrationStatus() {
   if (calibrationComplete) {
-    statusEl.textContent = '9-point text-area calibration complete';
+    statusEl.textContent = `${calibrationPoints.length}-point text-area calibration complete`;
     calibrateBtn.textContent = 'Calibrated';
     calibrateBtn.disabled = true;
     calibrationTarget.disabled = true;
@@ -470,19 +488,48 @@ function findWordAtPoint(x, y) {
   return element ? element.closest('.word') : null;
 }
 
-function trackWordHit(x, y) {
-  const wordElement = findWordAtPoint(x, y);
-  if (!wordElement) {
-    clearActiveHit();
-    return;
-  }
+function selectedTrackingPolicy() {
+  return trackingPolicyInputs.find(input => input.checked)?.value || 'freehand';
+}
 
-  setActiveHit(wordElement);
+function clampThreshold(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(300, value));
+}
 
-  if (!sessionActive) return;
+function selectedRelaxedThresholds() {
+  return {
+    x: clampThreshold(Number(relaxedThresholdXInput.value)),
+    y: clampThreshold(Number(relaxedThresholdYInput.value)),
+  };
+}
 
-  const index = Number(wordElement.dataset.index);
-  if (!Number.isInteger(index) || readWordIndexes.has(index)) return;
+function updateTrackingPolicyControls() {
+  const isRelaxed = selectedTrackingPolicy() === 'relaxed';
+  relaxedThresholdXInput.disabled = !isRelaxed || sessionActive;
+  relaxedThresholdYInput.disabled = !isRelaxed || sessionActive;
+  trackingPolicyInputs.forEach(input => {
+    input.disabled = sessionActive;
+  });
+}
+
+function gazeWithinExpandedWord(x, y, wordElement, thresholdX, thresholdY) {
+  const rect = wordElement.getBoundingClientRect();
+  return (
+    x >= rect.left - thresholdX &&
+    x <= rect.right + thresholdX &&
+    y >= rect.top - thresholdY &&
+    y <= rect.bottom + thresholdY
+  );
+}
+
+function currentSequentialWordElement() {
+  return wordElements[nextSequentialWordIndex] || null;
+}
+
+function markWordRead(index) {
+  const wordElement = wordElements[index];
+  if (!wordElement || readWordIndexes.has(index)) return false;
 
   const now = new Date();
   const elapsedMs = Math.max(0, performance.now() - sessionStartMs);
@@ -496,7 +543,65 @@ function trackWordHit(x, y) {
     worldTimestamp: now.toISOString(),
   });
 
+  if (activeTrackingPolicy !== 'freehand') {
+    nextSequentialWordIndex = index + 1;
+  }
+
   updateSessionStatus();
+  return true;
+}
+
+function trackWordHit(x, y) {
+  const wordElement = findWordAtPoint(x, y);
+
+  if (!sessionActive || activeTrackingPolicy === 'freehand') {
+    if (!wordElement) {
+      clearActiveHit();
+      return;
+    }
+
+    setActiveHit(wordElement);
+
+    if (!sessionActive) return;
+
+    const index = Number(wordElement.dataset.index);
+    if (!Number.isInteger(index)) return;
+    markWordRead(index);
+    return;
+  }
+
+  const nextWordElement = currentSequentialWordElement();
+  if (!nextWordElement) {
+    clearActiveHit();
+    return;
+  }
+
+  const nextIndex = Number(nextWordElement.dataset.index);
+  if (!Number.isInteger(nextIndex)) return;
+
+  if (activeTrackingPolicy === 'strict') {
+    if (wordElement === nextWordElement) {
+      setActiveHit(nextWordElement);
+      markWordRead(nextIndex);
+    } else if (wordElement) {
+      setActiveHit(wordElement);
+    } else {
+      clearActiveHit();
+    }
+    return;
+  }
+
+  if (gazeWithinExpandedWord(x, y, nextWordElement, activeRelaxedThresholdX, activeRelaxedThresholdY)) {
+    setActiveHit(nextWordElement);
+    markWordRead(nextIndex);
+    return;
+  }
+
+  if (wordElement) {
+    setActiveHit(wordElement);
+  } else {
+    clearActiveHit();
+  }
 }
 
 function renderText(text) {
@@ -507,8 +612,10 @@ function renderText(text) {
   sessionRows = [];
   sessionActive = false;
   sessionStartMs = null;
+  nextSequentialWordIndex = 0;
   finishSessionBtn.disabled = true;
   startSessionBtn.disabled = words.length === 0;
+  updateTrackingPolicyControls();
 
   textDisplay.innerHTML = '';
 
@@ -539,6 +646,7 @@ function resetReadingState({ keepText = true } = {}) {
   sessionStartMs = null;
   sessionRows = [];
   readWordIndexes.clear();
+  nextSequentialWordIndex = 0;
   clearActiveHit();
   wordElements.forEach(element => {
     element.classList.remove('read', 'hit');
@@ -555,11 +663,15 @@ function resetReadingState({ keepText = true } = {}) {
     renderWords();
   }
   updateSessionStatus();
+  updateTrackingPolicyControls();
 }
 
 function updateSessionStatus() {
   if (sessionActive) {
-    sessionStatusEl.textContent = `Reading session active. ${sessionRows.length} / ${words.length} words logged.`;
+    const policyText = activeTrackingPolicy === 'relaxed'
+      ? `relaxed, ±${activeRelaxedThresholdX}px x / ±${activeRelaxedThresholdY}px y`
+      : activeTrackingPolicy;
+    sessionStatusEl.textContent = `Reading session active (${policyText}). ${sessionRows.length} / ${words.length} words logged.`;
   } else if (words.length > 0) {
     sessionStatusEl.textContent = `${sessionRows.length} / ${words.length} words logged.`;
   } else {
@@ -747,11 +859,17 @@ startSessionBtn.addEventListener('click', () => {
     return;
   }
 
+  activeTrackingPolicy = selectedTrackingPolicy();
+  const relaxedThresholds = selectedRelaxedThresholds();
+  activeRelaxedThresholdX = relaxedThresholds.x;
+  activeRelaxedThresholdY = relaxedThresholds.y;
   resetReadingState({ keepText: true });
+  nextSequentialWordIndex = 0;
   sessionActive = true;
   sessionStartMs = performance.now();
   startSessionBtn.disabled = true;
   finishSessionBtn.disabled = false;
+  updateTrackingPolicyControls();
   updateSessionStatus();
 });
 
@@ -761,14 +879,20 @@ finishSessionBtn.addEventListener('click', () => {
   sessionActive = false;
   finishSessionBtn.disabled = true;
   startSessionBtn.disabled = words.length === 0;
+  updateTrackingPolicyControls();
   updateSessionStatus();
   downloadCsv();
+});
+
+trackingPolicyInputs.forEach(input => {
+  input.addEventListener('change', updateTrackingPolicyControls);
 });
 
 resetCalibrationUi();
 updateCardReference();
 updateSetupStatus();
 updateCalibrationStatus();
+updateTrackingPolicyControls();
 
 window.addEventListener('resize', () => {
   invalidateCalibrationIfViewportChanged();

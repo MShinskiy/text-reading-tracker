@@ -47,7 +47,7 @@ class GazeTrackerConfig:
     monitor_height_cm: float = 33.5
 
     # Smoothing/default ray settings
-    filter_length: int = 15         # default 10
+    filter_length: int = 12         # default 10
     gaze_length: float = 350.0
 
     # Angle-to-screen fallback mapping
@@ -667,12 +667,21 @@ class MonitorTracker:
                 ((float(rx), float(ry)), (float(tx - px), float(ty - py)))
                 for ((rx, ry), (tx, ty)), (px, py) in zip(self.calibration_samples, predicted)
             ]
-            self.calibration_vertical_rows = _vertical_residual_rows(self.calibration_samples, predicted_y)
-            self.calibration_model = "axis_separated_vertical_rows"
+            self.calibration_vertical_rows = _vertical_mapping_rows(self.calibration_samples)
+            self.calibration_model = "axis_separated_vertical_map"
 
+        predicted_y_for_diagnostics = np.array(
+            [
+                _vertical_row_mapping(float(row[1]), self.calibration_vertical_rows)
+                if self.calibration_vertical_rows
+                else float(row @ self.calibration_transform[1])
+                for row in raw
+            ],
+            dtype=float,
+        )
         self.calibration_diagnostics = _calibration_diagnostics(
             self.calibration_samples,
-            predicted=np.column_stack([raw @ self.calibration_transform[0], raw @ self.calibration_transform[1]]),
+            predicted=np.column_stack([raw @ self.calibration_transform[0], predicted_y_for_diagnostics]),
             vertical_rows=self.calibration_vertical_rows,
         )
 
@@ -685,8 +694,8 @@ class MonitorTracker:
 
         features = np.array([raw_x_norm, raw_y_norm, 1.0], dtype=float)
         corrected = self.calibration_transform @ features
-        if self.calibration_model == "axis_separated_vertical_rows" and self.calibration_vertical_rows:
-            corrected[1] += _vertical_row_correction(raw_y_norm, self.calibration_vertical_rows)
+        if self.calibration_model == "axis_separated_vertical_map" and self.calibration_vertical_rows:
+            corrected[1] = _vertical_row_mapping(raw_y_norm, self.calibration_vertical_rows)
 
         return (
             float(np.clip(corrected[0], 0.0, 1.0)),
@@ -985,33 +994,32 @@ def _robust_average_2d(points: Sequence[Tuple[float, float]]) -> Tuple[float, fl
     return float(averaged[0]), float(averaged[1]), int(len(kept))
 
 
-def _vertical_residual_rows(
+def _vertical_mapping_rows(
     samples: Sequence[Tuple[Tuple[float, float], Tuple[float, float]]],
-    predicted_y: np.ndarray,
 ) -> List[Tuple[float, float]]:
     grouped: Dict[float, List[Tuple[float, float]]] = {}
-    for ((raw_x, raw_y), (_target_x, target_y)), pred_y in zip(samples, predicted_y):
+    for (_raw_x, raw_y), (_target_x, target_y) in samples:
         row_key = round(float(target_y), 3)
-        grouped.setdefault(row_key, []).append((float(raw_y), float(target_y - pred_y)))
+        grouped.setdefault(row_key, []).append((float(raw_y), float(target_y)))
 
     rows: List[Tuple[float, float]] = []
     for _target_y, values in sorted(grouped.items()):
-        raw_y_values = np.array([raw_y for raw_y, _residual_y in values], dtype=float)
-        residual_y_values = np.array([residual_y for _raw_y, residual_y in values], dtype=float)
-        rows.append((float(np.mean(raw_y_values)), float(np.mean(residual_y_values))))
+        raw_y_values = np.array([raw_y for raw_y, _target_y_value in values], dtype=float)
+        target_y_values = np.array([target_y_value for _raw_y, target_y_value in values], dtype=float)
+        rows.append((float(np.mean(raw_y_values)), float(np.mean(target_y_values))))
     return rows
 
 
-def _vertical_row_correction(raw_y: float, rows: Sequence[Tuple[float, float]]) -> float:
+def _vertical_row_mapping(raw_y: float, rows: Sequence[Tuple[float, float]]) -> float:
     if not rows:
-        return 0.0
+        return float(raw_y)
     if len(rows) == 1:
         return float(rows[0][1])
 
     ordered = sorted(rows, key=lambda item: item[0])
     row_y = np.array([item[0] for item in ordered], dtype=float)
-    residual_y = np.array([item[1] for item in ordered], dtype=float)
-    return float(np.interp(raw_y, row_y, residual_y))
+    target_y = np.array([item[1] for item in ordered], dtype=float)
+    return float(np.interp(raw_y, row_y, target_y))
 
 
 def _calibration_diagnostics(
@@ -1037,9 +1045,9 @@ def _calibration_diagnostics(
             str(row): float(np.mean(values))
             for row, values in sorted(row_groups.items())
         },
-        "vertical_rows": [
-            {"raw_y": raw_y, "residual_y": residual_y}
-            for raw_y, residual_y in vertical_rows
+        "vertical_map_rows": [
+            {"raw_y": raw_y, "target_y": target_y}
+            for raw_y, target_y in vertical_rows
         ],
     }
 

@@ -275,6 +275,57 @@ input[type="file"] {
   margin-top: 0;
 }
 
+.trackingPolicyControl {
+  display: grid;
+  grid-template-columns: repeat(3, max-content);
+  gap: 6px 10px;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 8px 0 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trackingPolicyControl legend {
+  padding: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trackingPolicyControl label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.trackingPolicyControl input[type="radio"] {
+  margin: 0;
+}
+
+.relaxedThresholds {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.relaxedThresholds input {
+  width: 64px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.relaxedThresholds input:disabled {
+  opacity: 0.45;
+}
+
 button {
   border: 0;
   border-radius: 999px;
